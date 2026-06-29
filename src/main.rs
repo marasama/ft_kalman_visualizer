@@ -16,6 +16,38 @@ macro_rules! deg_to_rad {
     };
 }
 
+macro_rules! mat_rot {
+    ($axis:ident, $vec:expr, $angle:expr) => {
+        {
+            let (s, c) = ($angle.sin(), $angle.cos());
+            let mat = mat_rot!(@internal $axis, s, c);
+            mat.mul_vec($vec)
+        }
+    };
+
+    (@internal X, $s:expr, $c:expr) => {
+        Matrix::from([
+            [1., 0., 0.],
+            [0., $c, -$s],
+            [0., $s, $c],
+        ])
+    };
+    (@internal Y, $s:expr, $c:expr) => {
+        Matrix::from([
+            [$c, 0., $s],
+            [0., 1., 0.],
+            [-$s, 0., $c],
+        ])
+    };
+    (@internal Z, $s:expr, $c:expr) => {
+        Matrix::from([
+            [$c, -$s, 0.],
+            [$s, $c, 0.],
+            [0., 0., 1.],
+        ])
+    };
+}
+
 fn create_projection_matrix(
     aspect_ratio: f32,
     angle: f32,
@@ -151,7 +183,8 @@ impl eframe::App for World {
         self.t += 0.00001;
         for vect in &mut self.vertices {
             vect.data[2] -= z_offset;
-            rotate(vect, self.t, self.t);
+            *vect = mat_rot!(X, &*vect, self.t);
+            *vect = mat_rot!(Z, &*vect, self.t);
             vect.data[2] += z_offset;
         }
         ctx.request_repaint();
