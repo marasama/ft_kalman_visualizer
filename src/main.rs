@@ -200,7 +200,7 @@ impl eframe::App for World {
                 .map(|vert| to_screen(project(vert, &self.projection_matrix)))
                 .collect();
 
-            let stroke = egui::Stroke::new(1., egui::Color32::KHAKI);
+            let stroke = egui::Stroke::new(0., egui::Color32::KHAKI);
             //for &(start, end) in &self.edges {
             //    painter.line_segment([projected[start], projected[end]], stroke);
             //}
@@ -212,6 +212,8 @@ impl eframe::App for World {
                         &self.vertices[face[2]].sub_vec_ref(&self.vertices[face[0]]),
                         &self.vertices[face[1]].sub_vec_ref(&self.vertices[face[0]]),
                     )
+                    .normalize()
+                    .unwrap()
                 })
                 .collect();
 
@@ -231,12 +233,7 @@ impl eframe::App for World {
             faces_depth.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             let brightness: Vec<f32> = normals
                 .iter()
-                .map(|norm| {
-                    let dot = norm.dot(&Vector::from([-1., -1., 1.]).normalize().unwrap());
-                    let ambient = 0.15;
-                    let diffuse = dot.max(0.0);
-                    ambient + (1.0 - ambient) * diffuse
-                })
+                .map(|norm| norm.dot(&Vector::from([0., 0., 1.]).normalize().unwrap()))
                 .collect();
             for (i, _face) in faces_depth {
                 let path = egui::Shape::convex_polygon(
@@ -245,7 +242,11 @@ impl eframe::App for World {
                         projected[self.faces[i][1]],
                         projected[self.faces[i][2]],
                     ],
-                    Color32::GREEN.linear_multiply(brightness[i]),
+                    Color32::from_rgb(
+                        (brightness[i] * 255.) as u8,
+                        (brightness[i] * 255.) as u8,
+                        (brightness[i] * 255.) as u8,
+                    ),
                     stroke,
                 );
                 painter.add(path);
