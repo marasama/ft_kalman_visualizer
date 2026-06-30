@@ -1,7 +1,9 @@
 #![feature(generic_const_exprs)]
 use eframe::NativeOptions;
-use egui::pos2;
+use egui::{pos2, Color32};
 use matrix::matrix::Matrix;
+use matrix::vector::funcs::cross::cross_product;
+use matrix::vector::funcs::dot;
 use matrix::vector::Vector;
 use std::f32::consts::PI;
 
@@ -97,6 +99,7 @@ struct World {
     edges: Vec<(usize, usize)>,
     projection_matrix: Matrix<f32, 4, 4>,
     t: f32,
+    faces: Vec<[usize; 4]>,
 }
 
 impl Default for World {
@@ -127,11 +130,20 @@ impl Default for World {
             (3, 7),
         ];
 
+        let faces = vec![
+            [0, 3, 2, 1],
+            [4, 5, 6, 7],
+            [0, 1, 5, 4],
+            [3, 7, 6, 2],
+            [1, 2, 6, 5],
+            [4, 7, 3, 0],
+        ];
         World {
             vertices,
             edges,
             projection_matrix: create_projection_matrix(800. / 600., deg_to_rad!(90.), 1000., 0.1),
             t: 0.,
+            faces,
         }
     }
 }
@@ -158,7 +170,8 @@ impl eframe::App for World {
             let rect = ui.max_rect();
             let width = rect.width();
             let height = rect.height();
-
+            self.projection_matrix =
+                create_projection_matrix(width / height, deg_to_rad!(90.), 1000., 0.1);
             let painter = ui.painter();
             let to_screen = |ndc: Vector<f32, 3>| {
                 let x = rect.min.x + (ndc.data[0] + 1.) * 0.5 * width;
@@ -172,8 +185,41 @@ impl eframe::App for World {
                 .collect();
 
             let stroke = egui::Stroke::new(1., egui::Color32::KHAKI);
-            for &(start, end) in &self.edges {
-                painter.line_segment([projected[start], projected[end]], stroke);
+            //for &(start, end) in &self.edges {
+            //    painter.line_segment([projected[start], projected[end]], stroke);
+            //}
+            let normals: Vec<Vector<f32, 3>> = self
+                .faces
+                .iter()
+                .map(|face| {
+                    cross_product(
+                        &self.vertices[face[2]].sub_vec_ref(&self.vertices[face[0]]),
+                        &self.vertices[face[1]].sub_vec_ref(&self.vertices[face[0]]),
+                    )
+                })
+                .collect();
+
+            let brightness: Vec<f32> = normals
+                .iter()
+                .map(|norm| {
+                    let dot = norm.dot(&Vector::from([-0.707, -0.707, 0.707]));
+                    let ambient = 0.15;
+                    let diffuse = dot.max(0.0);
+                    ambient + (1.0 - ambient) * diffuse
+                })
+                .collect();
+            for (i, face) in self.faces.iter().enumerate() {
+                let path = egui::Shape::convex_polygon(
+                    vec![
+                        projected[face[0]],
+                        projected[face[1]],
+                        projected[face[2]],
+                        projected[face[3]],
+                    ],
+                    Color32::GREEN.linear_multiply(brightness[i]),
+                    stroke,
+                );
+                painter.add(path);
             }
         });
     }
