@@ -3,15 +3,12 @@ use eframe::NativeOptions;
 use egui::{pos2, Color32};
 use matrix::matrix::Matrix;
 use matrix::vector::funcs::cross::cross_product;
-use matrix::vector::funcs::dot;
 use matrix::vector::Vector;
 use std::f32::consts::PI;
+use std::fs::File;
+use std::io::{self, BufRead};
+use std::isize;
 
-enum Pos {
-    Pos2(Vector<f32, 2>),
-    Pos3(Vector<f32, 3>),
-    Pos4(Vector<f32, 4>),
-}
 macro_rules! deg_to_rad {
     ($deg:expr) => {
         ($deg) * (PI / 180.)
@@ -48,6 +45,67 @@ macro_rules! mat_rot {
             [0., 0., 1.],
         ])
     };
+}
+
+fn read_obj_file(
+    file_name: &str,
+) -> io::Result<(Vec<Vector<f32, 3>>, Vec<Vector<f32, 3>>, Vec<[usize; 3]>)> {
+    let obj_file = File::open(file_name)?;
+    let reader = std::io::BufReader::new(obj_file);
+
+    let mut vertices: Vec<Vector<f32, 3>> = Vec::new();
+    let mut normals: Vec<Vector<f32, 3>> = Vec::new();
+    let mut faces: Vec<[usize; 3]> = Vec::new();
+
+    for line_unwrapped in reader.lines() {
+        let line = line_unwrapped?;
+        let mut parts = line.split_whitespace();
+        match parts.next() {
+            Some("v") => {
+                let coordinates: Vec<f32> = parts
+                    .map(|p| p.parse::<f32>().expect("Invalid float value in file!"))
+                    .collect();
+                if coordinates.len() >= 3 {
+                    vertices.push(Vector::from([
+                        coordinates[0],
+                        coordinates[1],
+                        coordinates[2],
+                    ]));
+                }
+            }
+            Some("vn") => {
+                let coordinates: Vec<f32> = parts
+                    .map(|p| p.parse::<f32>().expect("Invalid float value in file!"))
+                    .collect();
+                if coordinates.len() >= 3 {
+                    normals.push(Vector::from([
+                        coordinates[0],
+                        coordinates[1],
+                        coordinates[2],
+                    ]));
+                }
+            }
+            Some("f") => {
+                let indices: Vec<usize> = parts
+                    .map(|p| {
+                        let v_str = p.split('/').next().unwrap();
+                        let idx: isize = v_str.parse().expect("Invalid usize value in file!");
+                        if idx > 0 {
+                            (idx - 1) as usize
+                        } else {
+                            (vertices.len() as isize + idx) as usize
+                        }
+                    })
+                    .collect();
+                if indices.len() >= 3 {
+                    faces.push([indices[0], indices[1], indices[2]]);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok((vertices, normals, faces))
 }
 
 fn create_projection_matrix(
@@ -96,72 +154,30 @@ fn main() {
 
 struct World {
     vertices: Vec<Vector<f32, 3>>,
-    edges: Vec<(usize, usize)>,
+    normals: Vec<Vector<f32, 3>>,
     projection_matrix: Matrix<f32, 4, 4>,
     t: f32,
-    faces: Vec<[usize; 4]>,
+    faces: Vec<[usize; 3]>,
 }
 
 impl Default for World {
     fn default() -> Self {
-        let z_offset = 13.0;
-        let vertices = vec![
-            Vector::from([-0.5, -0.5, z_offset - 0.5]),
-            Vector::from([0.5, -0.5, z_offset - 0.5]),
-            Vector::from([0.5, 0.5, z_offset - 0.5]),
-            Vector::from([-0.5, 0.5, z_offset - 0.5]),
-            Vector::from([-0.5, -0.5, z_offset + 0.5]),
-            Vector::from([0.5, -0.5, z_offset + 0.5]),
-            Vector::from([0.5, 0.5, z_offset + 0.5]),
-            Vector::from([-0.5, 0.5, z_offset + 0.5]),
-        ];
-        let edges = vec![
-            (0, 1),
-            (1, 2),
-            (2, 3),
-            (3, 0),
-            (4, 5),
-            (5, 6),
-            (6, 7),
-            (7, 4),
-            (0, 4),
-            (1, 5),
-            (2, 6),
-            (3, 7),
-        ];
+        let z_offset = 33.0;
 
-        let faces = vec![
-            [0, 3, 2, 1],
-            [4, 5, 6, 7],
-            [0, 1, 5, 4],
-            [3, 7, 6, 2],
-            [1, 2, 6, 5],
-            [4, 7, 3, 0],
-        ];
+        let (mut vertices, normals, faces) = read_obj_file("teapot.obj").unwrap();
+
+        for i in vertices.iter_mut() {
+            i.data[2] += z_offset;
+        }
+
         World {
             vertices,
-            edges,
+            normals,
             projection_matrix: create_projection_matrix(800. / 600., deg_to_rad!(90.), 1000., 0.1),
-            t: 0.,
+            t: 0.01,
             faces,
         }
     }
-}
-
-fn rotate(vect: &mut Vector<f32, 3>, rad_x: f32, rad_z: f32) {
-    let rot_mat_z = Matrix::from([
-        [rad_z.cos(), -rad_z.sin(), 0.],
-        [rad_z.sin(), rad_z.cos(), 0.],
-        [0., 0., 1.],
-    ]);
-
-    let rot_mat_x = Matrix::from([
-        [1., 0., 0.],
-        [0., rad_x.cos(), -rad_x.sin()],
-        [0., rad_x.sin(), rad_x.cos()],
-    ]);
-
-    *vect = rot_mat_z.mul_vec(&rot_mat_x.mul_vec(vect));
 }
 
 impl eframe::App for World {
@@ -199,22 +215,35 @@ impl eframe::App for World {
                 })
                 .collect();
 
+            let mut faces_depth: Vec<(usize, f32)> = self
+                .faces
+                .iter()
+                .enumerate()
+                .map(|(i, face)| {
+                    let z0 = self.vertices[face[0]].data[2];
+                    let z1 = self.vertices[face[1]].data[2];
+                    let z2 = self.vertices[face[2]].data[2];
+
+                    (i, (z0 + z1 + z2) / 4.0)
+                })
+                .collect();
+
+            faces_depth.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             let brightness: Vec<f32> = normals
                 .iter()
                 .map(|norm| {
-                    let dot = norm.dot(&Vector::from([-0.707, -0.707, 0.707]));
+                    let dot = norm.dot(&Vector::from([-1., -1., 1.]).normalize().unwrap());
                     let ambient = 0.15;
                     let diffuse = dot.max(0.0);
                     ambient + (1.0 - ambient) * diffuse
                 })
                 .collect();
-            for (i, face) in self.faces.iter().enumerate() {
+            for (i, _face) in faces_depth {
                 let path = egui::Shape::convex_polygon(
                     vec![
-                        projected[face[0]],
-                        projected[face[1]],
-                        projected[face[2]],
-                        projected[face[3]],
+                        projected[self.faces[i][0]],
+                        projected[self.faces[i][1]],
+                        projected[self.faces[i][2]],
                     ],
                     Color32::GREEN.linear_multiply(brightness[i]),
                     stroke,
@@ -225,8 +254,7 @@ impl eframe::App for World {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let z_offset = 13.0;
-        self.t += 0.00001;
+        let z_offset = 33.0;
         for vect in &mut self.vertices {
             vect.data[2] -= z_offset;
             *vect = mat_rot!(X, &*vect, self.t);

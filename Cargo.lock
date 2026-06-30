@@ -1779,7 +1779,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 [[package]]
 name = "matrix"
 version = "0.1.0"
-source = "git+https://github.com/marasama/ft_matrix?branch=stack_mem#e662d49c4d7e97baec33826b94e30958087b1f60"
+source = "git+https://github.com/marasama/ft_matrix?branch=stack_mem#9251d159eb80b5696afb4fbfcab5104b2414d285"
 dependencies = [
  "approx",
  "num-traits",
