@@ -1,6 +1,7 @@
 #![feature(generic_const_exprs)]
 use eframe::NativeOptions;
-use egui::{pos2, Color32};
+use egui::{pos2, Color32, Key};
+use matrix::matrix::funcs::inverse::identity_matrix;
 use matrix::matrix::Matrix;
 use matrix::vector::funcs::cross::cross_product;
 use matrix::vector::Vector;
@@ -122,17 +123,24 @@ where
     Matrix::from([
         [width_scaler / aspect_ratio, 0., 0., 0.],
         [0., width_scaler, 0., 0.],
-        [0., 0., depth_scaler, 1.],
-        [0., 0., -near_plane * depth_scaler, 0.],
+        [0., 0., depth_scaler, -near_plane * depth_scaler],
+        [0., 0., 1., 0.],
     ])
 }
 
-fn project(position: &Vector<f32, 3>, proj_mat: &Matrix<f32, 4, 4>) -> Vector<f32, 3>
+fn project(
+    position: &Vector<f32, 3>,
+    view_mat: &Matrix<f32, 4, 4>,
+    proj_mat: &Matrix<f32, 4, 4>,
+) -> Vector<f32, 3>
 where
     [(); 4 * 4]:,
 {
     let pos4 = Vector::from([position.data[0], position.data[1], position.data[2], 1.]);
-    let vec = proj_mat.mul_vec(&pos4);
+
+    let view_pos = view_mat.mul_vec(&pos4);
+    let vec = proj_mat.mul_vec(&view_pos);
+
     Vector::from([
         vec.data[0] / vec.data[3],
         vec.data[1] / vec.data[3],
@@ -152,32 +160,63 @@ fn main() {
     );
 }
 
+struct Camera {
+    pos: Vector<f32, 3>,
+    target: Vector<f32, 3>,
+    up: Vector<f32, 3>,
+}
+
 struct World {
     vertices: Vec<Vector<f32, 3>>,
     normals: Vec<Vector<f32, 3>>,
     projection_matrix: Matrix<f32, 4, 4>,
+    view_matrix: Matrix<f32, 4, 4>,
+    camera: Camera,
     t: f32,
     faces: Vec<[usize; 3]>,
 }
 
 impl Default for World {
     fn default() -> Self {
-        let z_offset = 33.0;
+        let (vertices, normals, faces) = read_obj_file("teapot.obj").unwrap();
 
-        let (mut vertices, normals, faces) = read_obj_file("teapot.obj").unwrap();
-
-        for i in vertices.iter_mut() {
-            i.data[2] += z_offset;
-        }
+        let camera = Camera {
+            pos: Vector::from([0., 0., -10.]),
+            target: Vector::from([0., 0., 0.]),
+            up: Vector::from([0., 1., 0.]),
+        };
 
         World {
             vertices,
             normals,
             projection_matrix: create_projection_matrix(800. / 600., deg_to_rad!(90.), 1000., 0.1),
+            view_matrix: identity_matrix::<f32, 4>(),
+            camera,
             t: 0.01,
             faces,
         }
     }
+}
+
+fn create_view_matrix(camera: &Camera) -> Matrix<f32, 4, 4>
+where
+    [(); 4 * 4]:,
+{
+    // Forward
+    let c = camera.target.sub_vec_ref(&camera.pos).normalize().unwrap();
+    // Right
+    let a = cross_product(&camera.up, &c);
+    // Up
+    let b = cross_product(&c, &a);
+
+    let t = &camera.pos;
+
+    Matrix::from([
+        [a.data[0], a.data[1], a.data[2], -t.dot(&a)],
+        [b.data[0], b.data[1], b.data[2], -t.dot(&b)],
+        [c.data[0], c.data[1], c.data[2], -t.dot(&c)],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
 }
 
 impl eframe::App for World {
@@ -188,6 +227,8 @@ impl eframe::App for World {
             let height = rect.height();
             self.projection_matrix =
                 create_projection_matrix(width / height, deg_to_rad!(90.), 1000., 0.1);
+
+            self.view_matrix = create_view_matrix(&self.camera);
             let painter = ui.painter();
             let to_screen = |ndc: Vector<f32, 3>| {
                 let x = rect.min.x + (ndc.data[0] + 1.) * 0.5 * width;
@@ -197,7 +238,7 @@ impl eframe::App for World {
             let projected: Vec<egui::Pos2> = self
                 .vertices
                 .iter()
-                .map(|vert| to_screen(project(vert, &self.projection_matrix)))
+                .map(|vert| to_screen(project(vert, &self.view_matrix, &self.projection_matrix)))
                 .collect();
 
             let stroke = egui::Stroke::new(0., egui::Color32::KHAKI);
@@ -226,7 +267,7 @@ impl eframe::App for World {
                     let z1 = self.vertices[face[1]].data[2];
                     let z2 = self.vertices[face[2]].data[2];
 
-                    (i, (z0 + z1 + z2) / 4.0)
+                    (i, (z0 + z1 + z2) / 3.0)
                 })
                 .collect();
 
@@ -255,13 +296,41 @@ impl eframe::App for World {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let z_offset = 33.0;
-        for vect in &mut self.vertices {
-            vect.data[2] -= z_offset;
-            *vect = mat_rot!(X, &*vect, self.t);
-            *vect = mat_rot!(Z, &*vect, self.t);
-            vect.data[2] += z_offset;
-        }
+        //let radius = -30.;
+        //self.camera.pos.data[0] = radius * self.t.sin();
+        //self.camera.pos.data[1] = -radius * self.t.cos();
+        //self.t += 0.02;
+        let speed = 0.5;
+        ctx.input(|k| {
+            if k.key_down(egui::Key::W) {
+                self.camera.pos.data[2] -= speed;
+                self.camera.target.data[2] -= speed;
+            }
+            if k.key_down(egui::Key::S) {
+                self.camera.pos.data[2] += speed;
+                self.camera.target.data[2] += speed;
+            }
+            if k.key_down(egui::Key::A) {
+                self.camera.target.data[0] -= speed;
+                self.camera.pos.data[0] -= speed;
+            }
+            if k.key_down(egui::Key::D) {
+                self.camera.target.data[0] += speed;
+                self.camera.pos.data[0] += speed;
+            }
+            if k.key_down(egui::Key::E) {
+                self.camera.target.data[1] -= speed;
+                self.camera.pos.data[1] -= speed;
+            }
+            if k.key_down(egui::Key::Q) {
+                self.camera.target.data[1] += speed;
+                self.camera.pos.data[1] += speed;
+            }
+            if k.key_down(egui::Key::Space) {
+                self.camera.pos = Vector::from([0., 10., -10.]);
+                self.camera.target = Vector::from([0., 0., 0.]);
+            }
+        });
         ctx.request_repaint();
     }
 }
